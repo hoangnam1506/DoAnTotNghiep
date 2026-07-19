@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PHỐ STUDIO — Mặc theo cách của phố</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <a class="logo" href="#">PHỐ<span>STUDIO</span></a>
+  <nav class="main-nav">
+    <a href="#new">Mới về</a>
+    <a href="#collection">Bộ sưu tập</a>
+    <a href="#sale">Sale</a>
+    <a href="#recentAds">Feed</a>
+  </nav>
+  <button class="cart-btn" id="cartBtn">Giỏ hàng <span id="cartCount">0</span></button>
+</header>
+
+<section class="hero">
+  <div class="hero-text">
+    <p class="eyebrow">BST Hè 2026 — Số 04</p>
+    <h1>Mặc theo<br>cách của phố.</h1>
+    <p class="hero-sub">Vải thật, dáng thật, giá thật. Không quảng cáo rỗng — chỉ có hàng dệt tử tế cho người đi bộ qua mọi con phố Hà Nội.</p>
+    <a href="#collection" class="btn-primary">Khám phá bộ sưu tập</a>
+  </div>
+  <div class="hero-swatch" aria-hidden="true">
+    <div class="swatch-block sb-1"></div>
+    <div class="swatch-block sb-2"></div>
+    <div class="swatch-block sb-3"></div>
+  </div>
+</section>
+
+<section class="collection" id="collection">
+  <div class="section-head">
+    <h2>Bộ sưu tập mới</h2>
+    <p>8 mẫu — dệt giới hạn, không tái bản.</p>
+  </div>
+
+  <div class="product-grid" id="productGrid"></div>
+</section>
+
+<!-- Bài đăng gần đây — hiển thị realtime qua socket.io,
+     và tải lịch sử từ DB khi mở trang qua GET /api/ads -->
+<section class="recent-ads" id="recentAds">
+  <h2 style="margin-bottom: 1rem; font-family: 'Fraunces', serif; font-weight: 600;">Bài đăng gần đây</h2>
+  <div id="recentAdsList" style="display: flex; flex-direction: column; gap: 0.75rem;">
+    <p id="recentAdsEmpty" style="color: #8e8e8e; font-size: 0.9rem;">Chưa có bài đăng nào.</p>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="footer-brand">
+    <p class="logo">PHỐ<span>STUDIO</span></p>
+    <p>Xưởng may nhỏ, đơn hàng lớn. Hà Nội, Việt Nam.</p>
+  </div>
+  <!-- <div class="footer-links">
+    <a href="#">Hướng dẫn chọn size</a>
+    <a href="#">Đổi trả</a>
+    <a href="#">Liên hệ</a>
+  </div> -->
+</footer>
+
+<!-- Product Detail Modal -->
+<div class="modal-overlay" id="productModal">
+  <div class="modal-content">
+    <button class="modal-close" id="modalClose" aria-label="Đóng">✕</button>
+    <div class="modal-layout">
+      <div class="modal-image-col">
+        <img id="modalImage" src="" alt="" class="modal-image">
+      </div>
+      <div class="modal-info-col">
+        <p class="modal-sku" id="modalSku"></p>
+        <h2 class="modal-name" id="modalName"></h2>
+        <p class="modal-price" id="modalPrice"></p>
+        <p class="modal-desc" id="modalDesc"></p>
+
+        <div class="modal-section">
+          <label>Kích cỡ</label>
+          <div class="modal-sizes" id="modalSizes"></div>
+        </div>
+
+        <div class="modal-section">
+          <label>Số lượng</label>
+          <div class="modal-qty">
+            <button id="modalQtyMinus">−</button>
+            <input type="number" id="modalQty" value="1" min="1" max="10" readonly>
+            <button id="modalQtyPlus">+</button>
+          </div>
+        </div>
+
+        <button class="modal-add-cart" id="modalAddCart">Thêm vào giỏ hàng</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Cart Sidebar -->
+<div class="cart-panel" id="cartPanel">
+  <div class="cart-panel-head">
+    <h2>Giỏ hàng</h2>
+    <button class="cart-close-btn" id="cartClose" aria-label="Đóng giỏ">✕</button>
+  </div>
+  <div class="cart-list" id="cartList"></div>
+  <div class="cart-footer">
+    <div class="cart-total-row">
+      <span>Tổng cộng</span>
+      <span class="cart-total-price" id="cartTotal">0đ</span>
+    </div>
+    <button class="cart-checkout-btn" id="checkoutBtn">Thanh toán</button>
+  </div>
+</div>
+
+<!-- Payment Modal -->
+<div class="payment-modal" id="paymentModal">
+  <div class="payment-modal-content">
+    <button class="payment-close" id="paymentClose">✕</button>
+    
+    <!-- Bước 1: Thông tin khách hàng -->
+    <div id="customerInfoSection">
+      <h3>Thông tin giao hàng</h3>
+      <div class="customer-form">
+        <input type="text" id="customerName" placeholder="Họ và tên *" required>
+        <input type="tel" id="customerPhone" placeholder="Số điện thoại *" required>
+        <input type="text" id="customerAddress" placeholder="Địa chỉ giao hàng *" required>
+        <textarea id="customerNote" placeholder="Ghi chú (tuỳ chọn): chọn size, màu sắc..." rows="2"></textarea>
+        <button class="submit-info-btn" id="submitInfoBtn">Tiếp tục → Quét mã thanh toán</button>
+      </div>
+    </div>
+    
+    <!-- Bước 2: Thanh toán QR -->
+    <div id="paymentSection" style="display:none">
+      <h3>Quét mã để thanh toán</h3>
+      <div class="payment-qr" id="paymentQr">
+        <img id="qrImage" src="" alt="QR thanh toán">
+      </div>
+      <div class="payment-info" id="paymentInfo"></div>
+      <p class="payment-note">📱 Dùng app ngân hàng quét mã QR hoặc chuyển khoản theo thông tin bên dưới</p>
+      <button class="payment-done-btn" id="paymentDoneBtn">✅ Đã chuyển khoản</button>
+    </div>
+  </div>
+</div>
+
+<!-- Chat widget: styled as a hanging price tag -->
+<div class="chat-widget" id="chatWidget">
+  <button class="chat-tag-btn" id="chatToggle" aria-label="Mở trợ lý AI">
+    <span class="tag-hole"></span>
+    <span class="tag-text">Hỏi PHỐ</span>
+  </button>
+
+  <div class="chat-panel" id="chatPanel" style="display:none">
+
+  <div class="chat-panel-head" id="chatDragHandle">
+    <div class="chat-resize-handle" id="chatResizeHandle"></div>
+    <div class="chat-head-left">
+      <span style="font-size:20px;line-height:1;">👗</span>
+      <div class="chat-head-info">
+        <p class="chat-title">Vân — Tư vấn PHỐ</p>
+        <p class="chat-status" id="chatStatus">● kết nối local</p>
+      </div>
+    </div>
+    <div class="chat-head-actions">
+      <button class="chat-close" id="chatClose" aria-label="Đóng">✕</button>
+    </div>
+  </div>
+
+    <div class="chat-messages" id="chatMessages">
+      <div class="msg msg-bot">Chào bạn 👋 Mình là <strong>Mai</strong> — trợ lý của PHỐ STUDIO. Cần tư vấn size, phối đồ hay xem sản phẩm — cứ hỏi mình nhé!</div>
+    </div>
+
+    <form class="chat-input-row" id="chatForm">
+      <input type="text" id="chatInput" placeholder="Nhập câu hỏi..." autocomplete="off">
+      <button type="submit" id="chatSend">Gửi</button>
+    </form>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+  const socket = io('http://localhost:3000');
+
+  // ----- Bài đăng gần đây (realtime từ socket.io) -----
+  const recentAdsList  = document.getElementById('recentAdsList');
+  const recentAdsEmpty = document.getElementById('recentAdsEmpty');
+  const renderedAdIds = new Set();
+
+  const platformLabel = { facebook:'Facebook', instagram:'Instagram', twitter:'Twitter', linkedin:'LinkedIn', tiktok:'TikTok' };
+
+  function ensureRecentAdsEmpty() {
+    if (recentAdsList.querySelector('[data-ad-id]')) return;
+    if (!document.getElementById('recentAdsEmpty')) {
+      const empty = document.createElement('p');
+      empty.id = 'recentAdsEmpty';
+      empty.style.cssText = 'color: #8e8e8e; font-size: 0.9rem;';
+      empty.textContent = 'Chưa có bài đăng nào.';
+      recentAdsList.appendChild(empty);
+    }
+  }
+
+  async function deleteAd(id, button) {
+    if (!confirm('Bạn có chắc muốn xóa bài đăng này?')) return;
+    button.disabled = true;
+    button.textContent = 'Đang xóa...';
+
+    try {
+      const res = await fetch(`http://localhost:3000/api/ads/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Server trả về lỗi ${res.status}`);
+      removeAdItem(id);
+    } catch (err) {
+      alert('Lỗi khi xóa bài: ' + err.message);
+      button.disabled = false;
+      button.textContent = 'Xóa';
+    }
+  }
+
+  function removeAdItem(id) {
+    recentAdsList.querySelector(`[data-ad-id="${id}"]`)?.remove();
+    renderedAdIds.delete(Number(id));
+    ensureRecentAdsEmpty();
+  }
+
+  function renderAdItem({ id, platform, content, image_url, created_at }, prepend = false) {
+    if (!id || renderedAdIds.has(Number(id))) return;
+    renderedAdIds.add(Number(id));
+    if (recentAdsEmpty) recentAdsEmpty.remove();
+    document.getElementById('recentAdsEmpty')?.remove();
+
+    const item = document.createElement('div');
+    item.dataset.adId = id;
+    item.style.cssText = 'padding: 0.75rem 1rem; border: 1px solid #e8e4da; border-radius: 10px; background: #f5f3ee; box-shadow: 0 1px 3px rgba(0,0,0,0.04);';
+    const time = created_at ? new Date(created_at).toLocaleString('vi-VN') : 'Vừa xong';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-bottom:0.25rem;';
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:0.75rem; font-weight:600; color:#0d3b66; text-transform:uppercase;';
+    label.textContent = platformLabel[platform] || platform;
+    header.appendChild(label);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size:0.9rem; white-space:pre-wrap; color: #2c2a28; line-height: 1.7;';
+    body.textContent = content;
+
+    // Hiển thị ảnh nếu có
+    let imgEl = null;
+    if (image_url) {
+      imgEl = document.createElement('img');
+      imgEl.src = image_url;
+      imgEl.style.cssText = 'width:100%; max-height:300px; object-fit:cover; border-radius:4px; margin:0.5rem 0;';
+      imgEl.loading = 'lazy';
+    }
+    const timestamp = document.createElement('div');
+    timestamp.style.cssText = 'font-size:0.7rem; color:#8e8e8e; margin-top:0.25rem;';
+    timestamp.textContent = time;
+    item.append(header, body);
+    if (imgEl) item.append(imgEl);
+    item.append(timestamp);
+    if (prepend) {
+      recentAdsList.insertBefore(item, recentAdsList.firstChild);
+    } else {
+      recentAdsList.appendChild(item);
+    }
+  }
+
+  // Tải lịch sử bài đăng
+  // trước khi trang này được mở.
+  async function loadRecentAds() {
+    try {
+      const res = await fetch('http://localhost:3000/api/ads?limit=10');
+      const data = await res.json();
+      (data.ads || []).forEach((ad) => renderAdItem(ad, false));
+    } catch (err) {
+      console.error('Không tải được lịch sử bài đăng:', err);
+    }
+  }
+  loadRecentAds();
+
+  // Realtime: mỗi khi có bài đăng mới
+  // thành công, server emit 'new-ad' — thêm ngay vào đầu danh sách.
+  socket.on('new-ad', ({ id, platform, content, created_at }) => {
+    renderAdItem({ id, platform, content, created_at }, true);
+  });
+
+  socket.on('ad-deleted', ({ id }) => removeAdItem(id));
+
+  socket.on('new-ad', ({ platform, content }) => {
+    const banner = document.createElement('div');
+    banner.style.cssText = `
+      position: fixed; bottom: 20px; right: 20px;
+      background: #0066ff; color: #fff;
+      padding: 1rem 1.5rem; border-radius: 8px;
+      max-width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,.2);
+      z-index: 9999; font-size: .95rem;
+    `;
+    banner.innerHTML = `<strong>📢 ${platform.toUpperCase()}</strong><br>${content}`;
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 8000);
+  });
+
+
+</script>
+
+<script src="script.js"></script>
+</body>
+</html>
