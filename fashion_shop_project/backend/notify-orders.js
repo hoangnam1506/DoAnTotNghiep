@@ -24,11 +24,13 @@ for (const order of newOrders) {
   const itemList = items.map(i => `${i.name} x${i.quantity}`).join(", ");
   const amount = (order.total_amount || 0).toLocaleString('vi-VN');
   
+  const orderStatus = order.order_status || 'mới';
   const message = `🛒 **ĐƠN HÀNG MỚI!**\n\n` +
     `🧾 Mã đơn: \`${order.id}\`\n` +
     `📦 Sản phẩm: ${itemList}\n` +
     `💰 Tổng tiền: **${amount}₫**\n` +
-    `✅ Trạng thái: **Đã thanh toán**\n` +
+    `✅ Trạng thái TT: **Đã thanh toán**\n` +
+    `📋 Tình trạng ĐH: **${orderStatus}**\n` +
     `⏰ Thời gian: ${order.paid_at || "vừa xong"}\n\n` +
     `👉 Thảo báo cáo doanh thu để xem chi tiết nhé!`;
 

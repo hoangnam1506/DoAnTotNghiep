@@ -14,10 +14,11 @@
 <header class="site-header">
   <a class="logo" href="#">PHỐ<span>STUDIO</span></a>
   <nav class="main-nav">
-    <a href="#new">Mới về</a>
+    <!-- <a href="#new">Mới về</a> -->
     <a href="#collection">Bộ sưu tập</a>
-    <a href="#sale">Sale</a>
+    <!-- <a href="#sale">Sale</a> -->
     <a href="#recentAds">Feed</a>
+    <a href="orders.html" target="_blank" style="color:#c62828;font-weight:600;">📋 Đơn hàng</a>
   </nav>
   <button class="cart-btn" id="cartBtn">Giỏ hàng <span id="cartCount">0</span></button>
 </header>
@@ -78,6 +79,7 @@
         <p class="modal-sku" id="modalSku"></p>
         <h2 class="modal-name" id="modalName"></h2>
         <p class="modal-price" id="modalPrice"></p>
+        <p class="modal-stock" id="modalStock" style="font-size:13px;margin-bottom:8px;"></p>
         <p class="modal-desc" id="modalDesc"></p>
 
         <div class="modal-section">
@@ -127,6 +129,7 @@
       <div class="customer-form">
         <input type="text" id="customerName" placeholder="Họ và tên *" required>
         <input type="tel" id="customerPhone" placeholder="Số điện thoại *" required>
+        <input type="email" id="customerEmail" placeholder="Email (Gmail)">
         <input type="text" id="customerAddress" placeholder="Địa chỉ giao hàng *" required>
         <textarea id="customerNote" placeholder="Ghi chú (tuỳ chọn): chọn size, màu sắc..." rows="2"></textarea>
         <button class="submit-info-btn" id="submitInfoBtn">Tiếp tục → Quét mã thanh toán</button>

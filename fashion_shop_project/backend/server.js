@@ -3,6 +3,7 @@ const cors = require("cors");
 const { execFile } = require("child_process");
 const { createServer } = require("http");
 const { Server } = require("socket.io");
+
 const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
@@ -176,20 +177,58 @@ db.exec(`
     items TEXT,
     total_amount INTEGER,
     status TEXT DEFAULT 'pending',
+    order_status TEXT DEFAULT 'mới',
     qr_data TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     paid_at DATETIME
   );
 `);
 
+// Migration: thêm cột order_status cho DB cũ
+const tableInfo = db.prepare("PRAGMA table_info(orders)").all();
+const hasOrderStatus = tableInfo.some(col => col.name === 'order_status');
+if (!hasOrderStatus) {
+  db.exec("ALTER TABLE orders ADD COLUMN order_status TEXT DEFAULT 'mới'");
+  console.log("✅ Đã migrate: thêm cột order_status cho bảng orders");
+}
+
+// Migration: thêm cột email cho DB cũ
+const hasEmail = tableInfo.some(col => col.name === 'customer_email');
+if (!hasEmail) {
+  db.exec("ALTER TABLE orders ADD COLUMN customer_email TEXT DEFAULT ''");
+  console.log("✅ Đã migrate: thêm cột customer_email cho bảng orders");
+}
+
 console.log("✅ Database đã sẵn sàng: pho_studio.db");
 
 app.use(cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-token"],
 }));
 app.use(express.json());
+
+// ====== Admin Auth ======
+// Đổi mật khẩu ở đây hoặc set biến môi trường ADMIN_PASSWORD
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "pho@admin2026";
+
+// Middleware kiểm tra admin token
+function adminAuth(req, res, next) {
+  const token = req.headers["x-admin-token"];
+  if (token === ADMIN_PASSWORD) {
+    return next();
+  }
+  return res.status(401).json({ error: "Unauthorized. Vui lòng đăng nhập." });
+}
+
+// Endpoint đăng nhập admin (không cần auth)
+app.post("/api/admin/login", (req, res) => {
+  const { password } = req.body;
+  if (password === ADMIN_PASSWORD) {
+    return res.json({ success: true, token: password });
+  }
+  return res.status(401).json({ success: false, error: "Sai mật khẩu!" });
+});
 
 // Route gốc — chỉ để xác nhận server sống
 app.get("/", (req, res) => {
@@ -299,15 +338,68 @@ app.get("/api/ads", (req, res) => {
 });
 
 // Xóa một bài đã đăng từ index.html và thông báo realtime cho các tab khác.
+// Helper: lấy stock theo size cho 1 sản phẩm
+function getStockBySize(productId) {
+  const rows = db.prepare("SELECT size, stock FROM product_stock WHERE product_id = ? ORDER BY size ASC").all(productId);
+  const total = rows.reduce((s, r) => s + r.stock, 0);
+  return { bySize: rows, total };
+}
+
 app.get("/api/images/products", (req, res) => {
   const rows = db
     .prepare("SELECT id, product_id, product_name, image_url, color_hex, sort_order FROM product_images ORDER BY sort_order ASC")
     .all();
-  const products = rows.map((p) => ({
-    ...p,
-    image_url: absUrl(p.image_url),
-  }));
+  const products = rows.map((p) => {
+    const stockInfo = getStockBySize(p.product_id);
+    return {
+      ...p,
+      image_url: absUrl(p.image_url),
+      stock: stockInfo.total,
+      stock_by_size: stockInfo.bySize,
+    };
+  });
   res.json({ products });
+});
+
+// Cập nhật số lượng tồn kho theo size
+app.post("/api/images/stock", adminAuth, (req, res) => {
+  const { product_id, size, stock } = req.body;
+  if (!product_id || stock === undefined || stock < 0) {
+    return res.status(400).json({ error: "product_id và stock (>=0) là bắt buộc." });
+  }
+  const existing = db.prepare("SELECT id FROM product_images WHERE product_id = ?").get(product_id);
+  if (!existing) return res.status(404).json({ error: "Không tìm thấy sản phẩm." });
+  
+  if (size) {
+    // Cập nhật theo size
+    db.prepare("INSERT INTO product_stock (product_id, size, stock) VALUES (?, ?, ?) ON CONFLICT(product_id, size) DO UPDATE SET stock = ?")
+      .run(product_id, size, stock, stock);
+    console.log(`[Stock] ✅ ${product_id} (${size}): stock = ${stock}`);
+    const stockInfo = getStockBySize(product_id);
+    res.json({ message: `✅ Đã cập nhật tồn kho size ${size}.`, product_id, stock_by_size: stockInfo.bySize, total: stockInfo.total });
+  } else {
+    // Cập nhật tất cả size về cùng 1 số
+    const sizes = db.prepare("SELECT size FROM product_stock WHERE product_id = ?").all(product_id);
+    const upd = db.prepare("UPDATE product_stock SET stock = ? WHERE product_id = ? AND size = ?");
+    for (const s of sizes) {
+      upd.run(stock, product_id, s.size);
+    }
+    console.log(`[Stock] ✅ ${product_id}: tất cả size = ${stock}`);
+    const stockInfo = getStockBySize(product_id);
+    res.json({ message: `✅ Đã cập nhật tất cả size.`, product_id, stock_by_size: stockInfo.bySize, total: stockInfo.total });
+  }
+});
+
+// Lấy danh sách tồn kho theo size
+app.get("/api/images/stock", adminAuth, (req, res) => {
+  const rows = db.prepare("SELECT p.product_id, p.product_name, ps.size, ps.stock FROM product_images p JOIN product_stock ps ON p.product_id = ps.product_id ORDER BY p.sort_order ASC, ps.size ASC").all();
+  // Nhóm theo sản phẩm
+  const grouped = {};
+  for (const r of rows) {
+    if (!grouped[r.product_id]) grouped[r.product_id] = { product_id: r.product_id, product_name: r.product_name, sizes: [] };
+    grouped[r.product_id].sizes.push({ size: r.size, stock: r.stock });
+  }
+  res.json({ products: Object.values(grouped) });
 });
 
 // Upload hình ảnh cho sản phẩm hoặc bài đăng
@@ -557,7 +649,7 @@ app.post("/api/post", (req, res) => {
 
 // Tạo đơn hàng và link thanh toán PayOS
 app.post("/api/payment/create", (req, res) => {
-    const { amount, items, customer_name, customer_phone, customer_address, customer_note } = req.body;
+    const { amount, items, customer_name, customer_phone, customer_email, customer_address, customer_note } = req.body;
     if (!amount || amount <= 0) {
         return res.status(400).json({ error: "Số tiền không hợp lệ." });
     }
@@ -574,8 +666,8 @@ app.post("/api/payment/create", (req, res) => {
     const accountNo = "1506006899999";
     const qrData = `https://img.vietqr.io/image/${bankCode}-${accountNo}-compact.jpg?amount=${amount}&addInfo=${encodeURIComponent(description)}&accountName=${encodeURIComponent("HOANG HA NAM")}`;
 
-    const stmt = db.prepare(`INSERT INTO orders (id, items, total_amount, status, qr_data, customer_name, customer_phone, customer_address, customer_note) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`);
-    stmt.run(orderId, JSON.stringify(items || []), amount, qrData, customer_name || "", customer_phone || "", customer_address || "", customer_note || "");
+    const stmt = db.prepare(`INSERT INTO orders (id, items, total_amount, status, order_status, qr_data, customer_name, customer_phone, customer_email, customer_address, customer_note) VALUES (?, ?, ?, 'pending', 'mới', ?, ?, ?, ?, ?, ?)`);
+    stmt.run(orderId, JSON.stringify(items || []), amount, qrData, customer_name || "", customer_phone || "", customer_email || "", customer_address || "", customer_note || "");
 
     res.json({
         orderId,
@@ -603,16 +695,20 @@ function notifyNewOrder(order) {
     // Thông tin khách hàng
     const name = order.customer_name || "—";
     const phone = order.customer_phone || "—";
+    const email = order.customer_email || "—";
     const address = order.customer_address || "—";
     const note = order.customer_note ? `\n📝 Ghi chú: ${order.customer_note}` : "";
     
+    const orderStatus = order.order_status || 'mới';
     const message = `🛒 **ĐƠN HÀNG MỚI!**\n\n` +
         `🧾 Mã đơn: \`${order.id}\`\n` +
         `👤 Khách: ${name} — ${phone}\n` +
+        `📧 Email: ${email}\n` +
         `📍 Địa chỉ: ${address}\n` +
         `📦 Sản phẩm: ${itemList}\n` +
         `💰 Tổng tiền: **${amount}₫**\n` +
-        `✅ Trạng thái: **Đã thanh toán**\n` +
+        `✅ Trạng thái TT: **Đã thanh toán**\n` +
+        `📋 Tình trạng ĐH: **${orderStatus}**\n` +
         `⏰ Thời gian: ${order.paid_at || "vừa xong"}${note}`;
 
     execFile("openclaw", [
@@ -623,14 +719,22 @@ function notifyNewOrder(order) {
     });
 }
 
+// Kiểm tra trạng thái đơn hàng (frontend poll)
+app.get("/api/payment/status/:orderId", (req, res) => {
+    const order = db.prepare("SELECT id, status, order_status, paid_at FROM orders WHERE id = ?").get(req.params.orderId);
+    if (!order) return res.status(404).json({ error: "Không tìm thấy đơn hàng." });
+    res.json({ id: order.id, status: order.status, order_status: order.order_status, paid_at: order.paid_at });
+});
+
 // Xác nhận thanh toán (thủ công từ chủ shop)
 app.post("/api/payment/confirm/:orderId", (req, res) => {
     const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.orderId);
     if (!order) return res.status(404).json({ error: "Không tìm thấy đơn hàng." });
-    db.prepare("UPDATE orders SET status = 'paid', paid_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.orderId);
+    db.prepare("UPDATE orders SET status = 'paid', order_status = 'mới', paid_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.orderId);
     
     // Gửi thông báo
     order.status = 'paid';
+    order.order_status = 'mới';
     order.paid_at = new Date().toISOString();
     notifyNewOrder(order);
     
@@ -638,10 +742,49 @@ app.post("/api/payment/confirm/:orderId", (req, res) => {
 });
 
 // ------------------------------------------------------------
+// Danh sách đơn hàng
+// ------------------------------------------------------------
+
+app.get("/api/orders", adminAuth, (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const status = req.query.status; // lọc theo order_status (mới, đã xử lý, đã hủy)
+    
+    let query = "SELECT * FROM orders";
+    let params = [];
+    
+    if (status && ['mới', 'đã xử lý', 'đã hủy'].includes(status)) {
+        query += " WHERE order_status = ?";
+        params.push(status);
+    }
+    
+    query += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+    
+    const orders = db.prepare(query).all(...params);
+    
+    const result = orders.map(o => ({
+        id: o.id,
+        customer_name: o.customer_name || "—",
+        customer_phone: o.customer_phone || o.phone || "—",
+        customer_email: o.customer_email || "Không có",
+        customer_address: o.customer_address || "—",
+        customer_note: o.customer_note || "",
+        items: (() => { try { return JSON.parse(o.items); } catch(e) { return []; } })(),
+        total_amount: o.total_amount,
+        payment_status: o.status,
+        order_status: o.order_status || 'mới',
+        created_at: o.created_at,
+        paid_at: o.paid_at || null
+    }));
+    
+    res.json({ orders: result });
+});
+
+// ------------------------------------------------------------
 // Chi tiết đơn hàng
 // ------------------------------------------------------------
 
-app.get("/api/orders/:id", (req, res) => {
+app.get("/api/orders/:id", adminAuth, (req, res) => {
     const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
     if (!order) return res.status(404).json({ error: "Không tìm thấy đơn hàng." });
     
@@ -652,22 +795,45 @@ app.get("/api/orders/:id", (req, res) => {
     res.json({
         id: order.id,
         customer_name: order.customer_name || "—",
-        customer_phone: order.customer_phone || "—",
+        customer_phone: order.customer_phone || order.phone || "—",
+        customer_email: order.customer_email || "Không có",
         customer_address: order.customer_address || "—",
         customer_note: order.customer_note || "",
         items: items,
         total_amount: order.total_amount,
-        status: order.status,
+        payment_status: order.status,
+        order_status: order.order_status || 'mới',
         created_at: order.created_at,
         paid_at: order.paid_at || null
     });
 });
 
 // ------------------------------------------------------------
+// Cập nhật trạng thái đơn hàng (mới → đã xử lý / đã hủy)
+// ------------------------------------------------------------
+
+app.post("/api/orders/:id/status", adminAuth, (req, res) => {
+    const { order_status } = req.body;
+    
+    if (!['mới', 'đã xử lý', 'đã hủy'].includes(order_status)) {
+        return res.status(400).json({ error: "Trạng thái không hợp lệ. Chỉ chấp nhận: mới, đã xử lý, đã hủy." });
+    }
+    
+    const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.id);
+    if (!order) return res.status(404).json({ error: "Không tìm thấy đơn hàng." });
+    
+    db.prepare("UPDATE orders SET order_status = ? WHERE id = ?").run(order_status, req.params.id);
+    
+    console.log(`[Đơn hàng] ${req.params.id}: ${order.order_status || 'mới'} → ${order_status}`);
+    
+    res.json({ message: `✅ Đã cập nhật trạng thái đơn hàng thành: ${order_status}`, orderId: req.params.id, order_status });
+});
+
+// ------------------------------------------------------------
 // Báo cáo doanh thu
 // ------------------------------------------------------------
 
-app.get("/api/revenue", (req, res) => {
+app.get("/api/revenue", adminAuth, (req, res) => {
     const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
     const year = parseInt(req.query.year) || new Date().getFullYear();
 
