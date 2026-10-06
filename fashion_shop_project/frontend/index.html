@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>PHỐ STUDIO — Mặc theo cách của phố</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -79,7 +82,7 @@
         <p class="modal-sku" id="modalSku"></p>
         <h2 class="modal-name" id="modalName"></h2>
         <p class="modal-price" id="modalPrice"></p>
-        <p class="modal-stock" id="modalStock" style="font-size:13px;margin-bottom:8px;"></p>
+        <p class="modal-stock" id="modalStock" style="display:none;"></p>
         <p class="modal-desc" id="modalDesc"></p>
 
         <div class="modal-section">
@@ -91,7 +94,7 @@
           <label>Số lượng</label>
           <div class="modal-qty">
             <button id="modalQtyMinus">−</button>
-            <input type="number" id="modalQty" value="1" min="1" max="10" readonly>
+            <input type="number" id="modalQty" value="1" min="1" max="999">
             <button id="modalQtyPlus">+</button>
           </div>
         </div>
@@ -131,7 +134,7 @@
         <input type="tel" id="customerPhone" placeholder="Số điện thoại *" required>
         <input type="email" id="customerEmail" placeholder="Email (Gmail)">
         <input type="text" id="customerAddress" placeholder="Địa chỉ giao hàng *" required>
-        <textarea id="customerNote" placeholder="Ghi chú (tuỳ chọn): chọn size, màu sắc..." rows="2"></textarea>
+        <textarea id="customerNote" placeholder="Ghi chú: " rows="2"></textarea>
         <button class="submit-info-btn" id="submitInfoBtn">Tiếp tục → Quét mã thanh toán</button>
       </div>
     </div>
@@ -143,6 +146,13 @@
         <img id="qrImage" src="" alt="QR thanh toán">
       </div>
       <div class="payment-info" id="paymentInfo"></div>
+      <div class="payment-timer" id="paymentTimer">
+        <span>⏳ Hiệu lực còn:</span>
+        <span class="timer-countdown" id="timerCountdown">05:00</span>
+      </div>
+      <div class="payment-expired" id="paymentExpired" style="display:none">
+        <p>❌ QR đã hết hạn. Vui lòng thử lại.</p>
+      </div>
       <p class="payment-note">📱 Dùng app ngân hàng quét mã QR hoặc chuyển khoản theo thông tin bên dưới</p>
       <button class="payment-done-btn" id="paymentDoneBtn">✅ Đã chuyển khoản</button>
     </div>
@@ -173,7 +183,7 @@
   </div>
 
     <div class="chat-messages" id="chatMessages">
-      <div class="msg msg-bot">Chào bạn 👋 Mình là <strong>Mai</strong> — trợ lý của PHỐ STUDIO. Cần tư vấn size, phối đồ hay xem sản phẩm — cứ hỏi mình nhé!</div>
+      <div class="msg msg-bot">Chào bạn 👋 Mình là <strong>Vân</strong> — trợ lý của PHỐ STUDIO. Cần tư vấn size, phối đồ hay xem sản phẩm — cứ hỏi mình nhé!</div>
     </div>
 
     <form class="chat-input-row" id="chatForm">
@@ -248,7 +258,8 @@
 
     const body = document.createElement('div');
     body.style.cssText = 'font-size:0.9rem; white-space:pre-wrap; color: #2c2a28; line-height: 1.7;';
-    body.textContent = content;
+    // Trang gửi nội dung HTML, dùng innerHTML để render đúng định dạng
+    body.innerHTML = content;
 
     // Hiển thị ảnh nếu có
     let imgEl = null;

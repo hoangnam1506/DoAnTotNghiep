@@ -1,5 +1,11 @@
 // script.js — PHỐ STUDIO Frontend
 
+// Dọn interval cũ khi load lại trang (tránh xung đột)
+if (window._paymentTimerInterval) clearInterval(window._paymentTimerInterval);
+if (window._paymentCheckInterval) clearInterval(window._paymentCheckInterval);
+window._paymentTimerInterval = null;
+window._paymentCheckInterval = null;
+
 const BACKEND_URL = "http://localhost:3000/api/chat";
 
 // ====== Product Data ======
@@ -41,11 +47,7 @@ function renderProducts() {
   if (!grid) return;
   grid.innerHTML = PRODUCTS.map((p) => {
     const imgUrl = p.image || null;
-    const stock = p.stock ?? 200;
-    const stockBadge = stock === 0 ? '<span style="position:absolute;top:12px;right:12px;background:#c62828;color:#fff;font-size:11px;padding:3px 8px;border-radius:4px;">Hết hàng</span>'
-      : stock <= 5 ? `<span style="position:absolute;top:12px;right:12px;background:#e65100;color:#fff;font-size:11px;padding:3px 8px;border-radius:4px;">Chỉ còn ${stock}</span>`
-      : '';
-    return `<div class="product-card" data-id="${p.id}" style="position:relative;">
+    return `<div class="product-card" data-id="${p.id}">
       <div class="product-image" style="border-radius:10px;overflow:hidden;">
         ${imgUrl
           ? `<img class="product-swatch" src="${imgUrl}" alt="${p.name}" loading="lazy" style="width:100%; height:280px; object-fit:cover;">`
@@ -57,7 +59,6 @@ function renderProducts() {
         <p class="product-material">${p.material}</p>
         <p class="product-price">${p.price.toLocaleString('vi-VN')}₫</p>
       </div>
-      ${stockBadge}
     </div>`;
   }).join('');
 
@@ -84,33 +85,9 @@ function openProductModal(p) {
   document.getElementById("modalDesc").textContent = p.material;
   document.getElementById("modalPrice").textContent = `${p.price.toLocaleString('vi-VN')}₫`;
   
-  // Hiển thị tồn kho — ưu tiên stock_by_size nếu có
+  // Ẩn tồn kho — chỉ Thảo báo cáo khi Cỏ cần
   const stockEl = document.getElementById("modalStock");
-  const stockBySize = p.stock_by_size;
-  if (stockBySize && stockBySize.length > 0) {
-    // Tạo map size → stock
-    const sizeStockMap = {};
-    stockBySize.forEach(item => { sizeStockMap[item.size] = item.stock; });
-    const total = stockBySize.reduce((s, i) => s + i.stock, 0);
-    const sizes = p.sizes.map(s => `${s}: ${sizeStockMap[s] !== undefined ? sizeStockMap[s] : '?'} cái`).join(" | ");
-    stockEl.innerHTML = `<span style="font-size:12px;">📦 Kho: </span><span style="font-size:12px;font-weight:500;">${sizes}</span>`;
-    stockEl.style.color = total === 0 ? "#c62828" : "#555";
-    
-    // Cập nhật stock tổng
-    p.stock = total;
-  } else {
-    const stock = p.stock ?? 200;
-    if (stock === 0) {
-      stockEl.textContent = "❌ Hết hàng";
-      stockEl.style.color = "#c62828";
-    } else if (stock <= 5) {
-      stockEl.textContent = `⚠️ Chỉ còn ${stock} cái`;
-      stockEl.style.color = "#e65100";
-    } else {
-      stockEl.textContent = `✅ Còn ${stock} cái trong kho`;
-      stockEl.style.color = "#2e7d32";
-    }
-  }
+  if (stockEl) stockEl.style.display = 'none';
   
   const sizeContainer = document.getElementById("modalSizes");
   sizeContainer.innerHTML = '';
@@ -122,24 +99,7 @@ function openProductModal(p) {
       sizeContainer.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       selectedSize = s;
-      // Cập nhật stock theo size được chọn
-      const pStockBySize = p.stock_by_size;
-      if (pStockBySize && pStockBySize.length > 0) {
-        const sizeInfo = pStockBySize.find(i => i.size === s);
-        if (sizeInfo) {
-          const totalEl = document.getElementById("modalStock");
-          if (sizeInfo.stock === 0) {
-            totalEl.innerHTML = `🔴 <b>${s}</b>: Hết hàng`;
-            totalEl.style.color = "#c62828";
-          } else if (sizeInfo.stock <= 5) {
-            totalEl.innerHTML = `🟠 <b>${s}</b>: Chỉ còn ${sizeInfo.stock} cái`;
-            totalEl.style.color = "#e65100";
-          } else {
-            totalEl.innerHTML = `🟢 <b>${s}</b>: Còn ${sizeInfo.stock} cái`;
-            totalEl.style.color = "#2e7d32";
-          }
-        }
-      }
+      // Stock theo size — ẩn, chỉ Thảo báo cáo khi Cỏ cần
     });
     if (!selectedSize) { btn.classList.add('active'); selectedSize = s; }
     sizeContainer.appendChild(btn);
@@ -243,7 +203,7 @@ document.getElementById("modalQtyMinus")?.addEventListener("click", () => {
 document.getElementById("modalQtyPlus")?.addEventListener("click", () => {
   const input = document.getElementById("modalQty");
   let val = parseInt(input.value) || 1;
-  if (val < 10) { val++; input.value = val; }
+  if (val < 999) { val++; input.value = val; }
 });
 
 // ====== Chat widget ======
@@ -501,6 +461,9 @@ document.getElementById("submitInfoBtn")?.addEventListener("click", async () => 
   if (!phone) { alert("Vui lòng nhập số điện thoại!"); return; }
   if (!address) { alert("Vui lòng nhập địa chỉ!"); return; }
 
+  // Disable nút để tránh double click gây xung đột polling/timer
+  document.getElementById("submitInfoBtn").disabled = true;
+
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
   const items = cart.map(i => ({ name: i.name, quantity: i.qty, price: i.price, size: i.size || '' }));
 
@@ -529,23 +492,62 @@ document.getElementById("submitInfoBtn")?.addEventListener("click", async () => 
       <p><strong>Chủ TK:</strong> ${data.bankInfo.holder}</p>
     `;
 
+    // Reset UI trạng thái timer
+    document.getElementById("paymentTimer").style.display = 'flex';
+    document.getElementById("paymentExpired").style.display = 'none';
+    document.getElementById("paymentDoneBtn").style.display = 'block';
+    document.getElementById("paymentDoneBtn").disabled = false;
+
+    // --- Countdown timer 5 phút (dùng thời gian browser, không phụ thuộc server clock) ---
+    const expiresAt = Date.now() + 300000;
+    window._paymentTimerInterval = setInterval(() => {
+      const diff = expiresAt - Date.now();
+      
+      if (diff <= 0) {
+        // Hết hạn
+        clearInterval(window._paymentTimerInterval);
+        clearInterval(window._paymentCheckInterval);
+        document.getElementById("timerCountdown").textContent = "00:00";
+        document.getElementById("paymentTimer").style.display = 'none';
+        document.getElementById("paymentExpired").style.display = 'block';
+        document.getElementById("paymentDoneBtn").style.display = 'none';
+        document.getElementById("qrImage").style.opacity = '0.3';
+        return;
+      }
+      
+      const mins = Math.floor(diff / 60000);
+      const secs = Math.floor((diff % 60000) / 1000);
+      document.getElementById("timerCountdown").textContent = 
+        String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    }, 1000);
+
     // Polling kiểm tra thanh toán
     window._paymentCheckInterval = setInterval(async () => {
       try {
         const checkRes = await fetch("http://localhost:3000/api/payment/status/" + data.orderId);
         const checkData = await checkRes.json();
-        if (checkData.status === 'paid') {
+        if (checkData.status === 'paid' && window._currentOrderId === data.orderId) {
+          clearInterval(window._paymentTimerInterval);
           clearInterval(window._paymentCheckInterval);
           alert("✅ Thanh toán thành công! Cảm ơn bạn!");
           cart = [];
           localStorage.setItem('pho-cart', JSON.stringify(cart));
           updateCartUI();
           document.getElementById("paymentModal").style.display = 'none';
+        } else if ((checkData.expired || checkData.status === 'cancelled') && window._currentOrderId === data.orderId && Date.now() >= expiresAt ) {
+          clearInterval(window._paymentTimerInterval);
+          clearInterval(window._paymentCheckInterval);
+          document.getElementById("timerCountdown").textContent = "00:00";
+          document.getElementById("paymentTimer").style.display = 'none';
+          document.getElementById("paymentExpired").style.display = 'block';
+          document.getElementById("paymentDoneBtn").style.display = 'none';
+          document.getElementById("qrImage").style.opacity = '0.3';
         }
       } catch(e) {}
     }, 5000);
 
   } catch(err) {
+    document.getElementById("submitInfoBtn").disabled = false;
     alert("Lỗi kết nối: " + err.message);
   }
 });
@@ -560,6 +562,7 @@ document.getElementById("paymentDoneBtn")?.addEventListener("click", async () =>
     const result = await res.json();
     if (!res.ok) { alert("Lỗi: " + (result.error || "Xác nhận thất bại")); return; }
     if (window._paymentCheckInterval) clearInterval(window._paymentCheckInterval);
+    if (window._paymentTimerInterval) clearInterval(window._paymentTimerInterval);
     alert("✅ Đã xác nhận thanh toán! Cảm ơn bạn!");
     cart = [];
     localStorage.setItem('pho-cart', JSON.stringify(cart));

@@ -40,7 +40,7 @@ for (const order of newOrders) {
     "--agent", "main",
     "--message", message,
     "--json"
-  ], { timeout: 30000 }, (err) => {
+  ], { timeout: 120000 }, (err) => {
     if (err) console.error("Lỗi gửi thông báo:", err.message);
   });
 

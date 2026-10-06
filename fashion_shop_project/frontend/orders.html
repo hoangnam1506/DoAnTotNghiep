@@ -254,7 +254,7 @@ body {
 
 <script>
 const API = 'http://localhost:3000';
-const TOKEN_KEY = '***';
+const TOKEN_KEY = 'pho_admin_token';
 
 let allOrders = [];
 let currentFilter = 'all';
@@ -299,13 +299,26 @@ function apiHeaders() { return { 'Content-Type': 'application/json', 'x-admin-to
 
 // ====== Orders ======
 function formatMoney(n) { return (n || 0).toLocaleString('vi-VN') + '₫'; }
+function parseSqliteDatetime(d) {
+  if (!d) return null;
+  // Định dạng SQLite: "2026-09-06 16:55:48" → ISO: "2026-09-06T16:55:48+07:00"
+  const iso = d.includes('T') ? d : d.replace(' ', 'T') + '+07:00';
+  const date = new Date(iso);
+  return isNaN(date.getTime()) ? null : date;
+}
+
 function formatDate(d) {
-  if (!d) return '—';
-  const date = new Date(d + (d.includes('T') ? '' : 'T00:00:00'));
+  const date = parseSqliteDatetime(d);
+  if (!date) return '—';
   return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
+function formatFullDate(d) {
+  const date = parseSqliteDatetime(d);
+  if (!date) return '—';
+  return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 function statusClass(s) { return { 'mới':'new','đã xử lý':'processed','đã hủy':'cancelled','paid':'paid','pending':'pending' }[s]||''; }
-function statusLabel(s) { return { 'mới':'🆕 Mới','đã xử lý':'✅ Đã xử lý','đã hủy':'❌ Đã hủy','paid':'Đã TT','pending':'Chờ TT' }[s]||s; }
+function statusLabel(s) { return { 'mới':'🆕 Mới','đã xử lý':'✅ Đã xử lý','đã hủy':'❌ Đã hủy','paid':'✅ Đã thanh toán','pending':'⏳ Chờ thanh toán' }[s]||s; }
 
 // ====== Order Detail Modal ======
 function openModal(orderId) {
@@ -402,7 +415,8 @@ function renderOrders() {
         <th style="text-align:right">Tiền</th>
         <th>Thanh toán</th>
         <th>Trạng thái đơn</th>
-        <th>Ngày</th>
+        <th>Ngày tạo</th>
+        <th>Ngày thanh toán</th>
         <th></th>
       </tr>
     </thead>
@@ -418,7 +432,8 @@ function renderOrders() {
       <td class="amount">${formatMoney(o.total_amount)}</td>
       <td><span class="status-badge ${statusClass(o.payment_status)}">${statusLabel(o.payment_status)}</span></td>
       <td><span class="status-badge ${statusClass(o.order_status)}">${statusLabel(o.order_status)}</span></td>
-      <td class="date-col">${formatDate(o.created_at)}</td>
+      <td class="date-col" title="Ngày tạo: ${formatFullDate(o.created_at)}">${formatDate(o.created_at)}</td>
+      <td class="date-col" title="Ngày thanh toán: ${o.paid_at ? formatFullDate(o.paid_at) : 'Chưa thanh toán'}">${o.paid_at ? formatDate(o.paid_at) : '<span style="color:#8e8e8e">—</span>'}</td>
       <td>
         <select class="status-select" onchange="updateStatus('${o.id}', this.value)">
           <option value="mới" ${o.order_status === 'mới' ? 'selected' : ''}>🆕 Mới</option>

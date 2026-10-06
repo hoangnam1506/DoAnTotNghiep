@@ -127,9 +127,15 @@ const upload = multer({
 
 const FRONTEND_DIR = path.join(__dirname, "..", "frontend");
 
-// Serve thư mục uploads và frontend dưới dạng tĩnh
-app.use("/uploads", express.static(UPLOADS_DIR));
-app.use(express.static(FRONTEND_DIR));
+// Serve thư mục uploads và frontend dưới dạng tĩnh (không cache)
+app.use("/uploads", express.static(UPLOADS_DIR, { maxAge: 0 }));
+app.use((req, res, next) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    next();
+});
+app.use(express.static(FRONTEND_DIR, { maxAge: 0, etag: false, lastModified: false }));
 
 // Khởi tạo database
 const db = new Database(path.join(__dirname, "pho_studio.db"));
@@ -140,7 +146,7 @@ db.exec(`
     platform TEXT,
     content TEXT,
     image_url TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT (datetime('now', '+7 hours'))
   );
 
   CREATE TABLE IF NOT EXISTS pending_ads (
@@ -148,7 +154,7 @@ db.exec(`
     platform TEXT NOT NULL,
     content TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT (datetime('now', '+7 hours')),
     reviewed_at DATETIME
   );
 
@@ -157,7 +163,7 @@ db.exec(`
     session_id TEXT,
     role TEXT,
     message TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT (datetime('now', '+7 hours'))
   );
 
   CREATE TABLE IF NOT EXISTS product_images (
@@ -167,7 +173,7 @@ db.exec(`
     image_url TEXT NOT NULL,
     color_hex TEXT,
     sort_order INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT (datetime('now', '+7 hours'))
   );
 
   CREATE TABLE IF NOT EXISTS orders (
@@ -179,7 +185,7 @@ db.exec(`
     status TEXT DEFAULT 'pending',
     order_status TEXT DEFAULT 'mới',
     qr_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT (datetime('now', '+7 hours')),
     paid_at DATETIME
   );
 `);
@@ -197,6 +203,37 @@ const hasEmail = tableInfo.some(col => col.name === 'customer_email');
 if (!hasEmail) {
   db.exec("ALTER TABLE orders ADD COLUMN customer_email TEXT DEFAULT ''");
   console.log("✅ Đã migrate: thêm cột customer_email cho bảng orders");
+}
+
+// Migration: sửa created_at từ UTC → giờ VN (+7h) nếu dữ liệu đang lưu UTC
+const lastOrder = db.prepare("SELECT created_at FROM orders ORDER BY created_at DESC LIMIT 1").get();
+if (lastOrder && lastOrder.created_at) {
+  // Nếu created_at gần với UTC (cách thời điểm hiện tại UTC < 10 phút) → đang lưu UTC, cần +7h
+  const latestStr = lastOrder.created_at.replace(' ', 'T') + 'Z';
+  const latest = new Date(latestStr).getTime();
+  const utcNow = Date.now();
+  const diffMin = (utcNow - latest) / 60000;
+  if (!isNaN(latest) && diffMin >= 0 && diffMin < 10) {
+    console.log("🔄 Đang migrate created_at từ UTC → giờ VN (+7h)...");
+    const migration = db.transaction(() => {
+      // Cập nhật created_at: thêm 7 tiếng
+      db.exec("UPDATE orders SET created_at = datetime(created_at, '+7 hours') WHERE created_at IS NOT NULL");
+      // Nếu paid_at cũng lưu UTC (kiểm tra đơn mới nhất có paid_at)
+      const lastPaid = db.prepare("SELECT paid_at FROM orders WHERE paid_at IS NOT NULL ORDER BY paid_at DESC LIMIT 1").get();
+      if (lastPaid && lastPaid.paid_at) {
+        const paidLatest = new Date(lastPaid.paid_at.replace(' ', 'T') + 'Z').getTime();
+        const paidDiffMin = (utcNow - paidLatest) / 60000;
+        if (!isNaN(paidLatest) && paidDiffMin >= 0 && paidDiffMin < 10) {
+          db.exec("UPDATE orders SET paid_at = datetime(paid_at, '+7 hours') WHERE paid_at IS NOT NULL");
+          console.log("  ✅ Đã migrate cả paid_at từ UTC → giờ VN");
+        }
+      }
+    });
+    migration();
+    console.log("✅ Đã migrate created_at từ UTC → giờ VN (+7h)");
+  } else {
+    console.log("✅ created_at đã được lưu theo giờ VN, không cần migrate.");
+  }
 }
 
 console.log("✅ Database đã sẵn sàng: pho_studio.db");
@@ -328,12 +365,25 @@ function absUrl(url) {
   return BASE_URL + url;
 }
 
+// Helper: chuyển SQLite datetime (UTC+7, không timezone) → ISO string với '+07:00'
+function toISOZ(dateStr) {
+  if (!dateStr) return dateStr;
+  return dateStr.replace(' ', 'T') + '+07:00';
+}
+
+// Helper: lấy thời điểm hiện tại theo giờ VN (+7) dưới dạng ISO string
+function vnISOString(date) {
+  date = date || new Date();
+  const vnStr = date.toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });
+  return vnStr.replace(' ', 'T') + '+07:00';
+}
+
 app.get("/api/ads", (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const rows = db
         .prepare("SELECT id, platform, content, image_url, created_at FROM ads ORDER BY created_at DESC LIMIT ?")
         .all(limit);
-    const ads = rows.map((a) => ({ ...a, image_url: absUrl(a.image_url) }));
+    const ads = rows.map((a) => ({ ...a, image_url: absUrl(a.image_url), created_at: toISOZ(a.created_at) }));
     res.json({ ads });
 });
 
@@ -449,7 +499,7 @@ function validateAd(platform, content) {
     if (!platform || typeof content !== "string" || !content.trim()) {
         return "Both 'platform' and 'content' fields are required.";
     }
-    if (!allowedPlatforms.includes(platform)) {
+    if (!allowedPlatforms.includes(platform.toLowerCase())) {
         return `Unsupported platform: ${platform}`;
     }
     return null;
@@ -493,7 +543,7 @@ const approvePendingAd = db.transaction((id) => {
     if (!approval) return { error: "not_found" };
     if (approval.status !== "pending") return { error: "already_reviewed", approval };
 
-    db.prepare("UPDATE pending_ads SET status = 'approved', reviewed_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+    db.prepare("UPDATE pending_ads SET status = 'approved', reviewed_at = datetime('now', '+7 hours') WHERE id = ?").run(id);
     const result = db.prepare("INSERT INTO ads (platform, content) VALUES (?, ?)").run(approval.platform, approval.content);
     const ad = db
         .prepare("SELECT id, platform, content, image_url, created_at FROM ads WHERE id = ?")
@@ -542,7 +592,7 @@ app.post("/api/approvals/:id/reject", (req, res) => {
     if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: "Invalid approval id." });
 
     const result = db
-        .prepare("UPDATE pending_ads SET status = 'rejected', reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'")
+        .prepare("UPDATE pending_ads SET status = 'rejected', reviewed_at = datetime('now', '+7 hours') WHERE id = ? AND status = 'pending'")
         .run(id);
     if (!result.changes) {
         const exists = db.prepare("SELECT status FROM pending_ads WHERE id = ?").get(id);
@@ -583,18 +633,30 @@ app.post("/api/agent/trigger", async (req, res) => {
     }
 });
 
+// Ping — kiểm tra endpoint không ghi dữ liệu
+app.get("/api/agent/ping", (req, res) => {
+    res.json({ status: "ok", message: "API backend đang hoạt động.", timestamp: vnISOString() });
+});
+
 // Đăng bài (giả lập). Body: { platform, content, image_url }
 app.post("/api/agent/post", (req, res) => {
     const { platform, content } = req.body;
     const validationError = validateAd(platform, content);
     if (validationError) return res.status(400).json({ error: validationError });
 
-    const result = db.prepare("INSERT INTO ads (platform, content, image_url) VALUES (?, ?, ?)").run(platform, content, req.body.image_url || null);
+    const result = db.prepare("INSERT INTO ads (platform, content, image_url, created_at) VALUES (?, ?, ?, datetime('now', '+7 hours'))").run(platform, content, req.body.image_url || null);
     const ad = db.prepare("SELECT id, platform, content, image_url, created_at FROM ads WHERE id = ?").get(result.lastInsertRowid);
     ad.image_url = absUrl(ad.image_url);
+    ad.created_at = toISOZ(ad.created_at);
 
     console.log(`[SocialPost] Platform: ${platform}\nContent: ${content}`);
     io.emit("new-ad", ad);
+
+    // Gửi mail cho khách hàng (bất đồng bộ, không block response)
+    const platformLabel = platform || "Website";
+    notifySubscribers(content, platformLabel).catch(err => {
+        console.error(`[SocialPost] Lỗi gửi mail subscribers: ${err.message}`);
+    });
 
     return res.json({ message: `✅ Nội dung đã được "đăng" lên ${platform} (giả lập).`, ad });
 });
@@ -633,9 +695,10 @@ app.post("/api/post", (req, res) => {
     const validationError = validateAd(platform, content);
     if (validationError) return res.status(400).json({ error: validationError });
 
-    const result = db.prepare("INSERT INTO ads (platform, content, image_url) VALUES (?, ?, ?)").run(platform, content, req.body.image_url || null);
+    const result = db.prepare("INSERT INTO ads (platform, content, image_url, created_at) VALUES (?, ?, ?, datetime('now', '+7 hours'))").run(platform, content, req.body.image_url || null);
     const ad = db.prepare("SELECT id, platform, content, image_url, created_at FROM ads WHERE id = ?").get(result.lastInsertRowid);
     ad.image_url = absUrl(ad.image_url);
+    ad.created_at = toISOZ(ad.created_at);
 
     console.log(`[SocialPost] Platform: ${platform}\nContent: ${content}`);
     io.emit("new-ad", ad);
@@ -650,8 +713,30 @@ app.post("/api/post", (req, res) => {
 // Tạo đơn hàng và link thanh toán PayOS
 app.post("/api/payment/create", (req, res) => {
     const { amount, items, customer_name, customer_phone, customer_email, customer_address, customer_note } = req.body;
-    if (!amount || amount <= 0) {
-        return res.status(400).json({ error: "Số tiền không hợp lệ." });
+    
+    // Validation chống đơn rác
+    if (!amount || amount <= 0 || amount < 10000) {
+        return res.status(400).json({ error: "Số tiền không hợp lệ (tối thiểu 10.000₫)." });
+    }
+    
+    // Kiểm tra items không rỗng
+    if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "Giỏ hàng trống. Vui lòng chọn sản phẩm." });
+    }
+    
+    // Kiểm tra mỗi item có name, quantity, price hợp lệ
+    for (const item of items) {
+        if (!item.name || !item.price || item.price <= 0) {
+            return res.status(400).json({ error: `Sản phẩm "${item.name || "không xác định"}" thiếu thông tin giá.` });
+        }
+        if (!item.quantity || item.quantity <= 0) {
+            return res.status(400).json({ error: `Sản phẩm "${item.name}" thiếu số lượng.` });
+        }
+    }
+    
+    // Cần ít nhất tên hoặc SĐT khách hàng
+    if (!customer_name && !customer_phone) {
+        return res.status(400).json({ error: "Vui lòng nhập tên hoặc số điện thoại." });
     }
 
     const date = new Date();
@@ -666,8 +751,12 @@ app.post("/api/payment/create", (req, res) => {
     const accountNo = "1506006899999";
     const qrData = `https://img.vietqr.io/image/${bankCode}-${accountNo}-compact.jpg?amount=${amount}&addInfo=${encodeURIComponent(description)}&accountName=${encodeURIComponent("HOANG HA NAM")}`;
 
-    const stmt = db.prepare(`INSERT INTO orders (id, items, total_amount, status, order_status, qr_data, customer_name, customer_phone, customer_email, customer_address, customer_note) VALUES (?, ?, ?, 'pending', 'mới', ?, ?, ?, ?, ?, ?)`);
+    const stmt = db.prepare(`INSERT INTO orders (id, items, total_amount, status, order_status, qr_data, customer_name, customer_phone, customer_email, customer_address, customer_note, created_at) VALUES (?, ?, ?, 'pending', 'mới', ?, ?, ?, ?, ?, ?, datetime('now', '+7 hours'))`);
     stmt.run(orderId, JSON.stringify(items || []), amount, qrData, customer_name || "", customer_phone || "", customer_email || "", customer_address || "", customer_note || "");
+
+    // Query created_at từ DB (SQLite native format)
+    const inserted = db.prepare("SELECT created_at FROM orders WHERE id = ?").get(orderId);
+    const expiresAtMs = Date.now() + 5 * 60 * 1000;
 
     res.json({
         orderId,
@@ -678,67 +767,97 @@ app.post("/api/payment/create", (req, res) => {
             bank: bankCode,
             account: accountNo,
             holder: "HOANG HA NAM"
-        }
+        },
+        createdAt: inserted.created_at,
+        expiresAt: vnISOString(new Date(expiresAtMs)),
+        expiresAtMs,
+        expiresInSeconds: 300
     });
 });
 
-// Webhook từ PayOS
-// Kiểm tra trạng thái đơn hàng (từ PayOS hoặc local)
-// Hàm gửi thông báo đơn hàng mới qua Telegram (gọi main agent)
-function notifyNewOrder(order) {
-    let items = [];
-    try { items = JSON.parse(order.items); } catch(e) { items = [{ name: "Sản phẩm", quantity: 1 }]; }
-    
-    const itemList = items.map(i => `${i.name} x${i.quantity}`).join(", ");
-    const amount = (order.total_amount || 0).toLocaleString('vi-VN');
-    
-    // Thông tin khách hàng
-    const name = order.customer_name || "—";
-    const phone = order.customer_phone || "—";
-    const email = order.customer_email || "—";
-    const address = order.customer_address || "—";
-    const note = order.customer_note ? `\n📝 Ghi chú: ${order.customer_note}` : "";
-    
-    const orderStatus = order.order_status || 'mới';
-    const message = `🛒 **ĐƠN HÀNG MỚI!**\n\n` +
-        `🧾 Mã đơn: \`${order.id}\`\n` +
-        `👤 Khách: ${name} — ${phone}\n` +
-        `📧 Email: ${email}\n` +
-        `📍 Địa chỉ: ${address}\n` +
-        `📦 Sản phẩm: ${itemList}\n` +
-        `💰 Tổng tiền: **${amount}₫**\n` +
-        `✅ Trạng thái TT: **Đã thanh toán**\n` +
-        `📋 Tình trạng ĐH: **${orderStatus}**\n` +
-        `⏰ Thời gian: ${order.paid_at || "vừa xong"}${note}`;
-
-    execFile("openclaw", [
-        "agent", "--agent", "main", "--message", message, "--channel", "telegram", "--to", "1415995118", "--deliver", "--json"
-    ], { timeout: 30000 }, (err) => {
-        if (err) console.error("[Notify] Lỗi gửi thông báo:", err.message);
-        else console.log(`[Notify] ✅ Đã thông báo đơn hàng: ${order.id}`);
-    });
-}
-
 // Kiểm tra trạng thái đơn hàng (frontend poll)
 app.get("/api/payment/status/:orderId", (req, res) => {
-    const order = db.prepare("SELECT id, status, order_status, paid_at FROM orders WHERE id = ?").get(req.params.orderId);
+    const order = db.prepare("SELECT id, status, order_status, paid_at, created_at FROM orders WHERE id = ?").get(req.params.orderId);
     if (!order) return res.status(404).json({ error: "Không tìm thấy đơn hàng." });
-    res.json({ id: order.id, status: order.status, order_status: order.order_status, paid_at: order.paid_at });
+    
+    let expired = false;
+    let expiresAt = null;
+    let currentStatus = order.status;
+    let currentOrderStatus = order.order_status;
+
+    if (order.status === 'pending') {
+        const createdAt = new Date(order.created_at).getTime();
+        const now = Date.now();
+        const ageSeconds = (now - createdAt) / 1000;
+        
+        if (ageSeconds > 5 * 60) {
+            // Tự động hủy đơn nếu quá 5 phút
+            db.prepare("UPDATE orders SET status = 'cancelled', order_status = 'đã hủy' WHERE id = ? AND status = 'pending'").run(req.params.orderId);
+            expired = true;
+            currentStatus = 'cancelled';
+            currentOrderStatus = 'đã hủy';
+        } else {
+            expiresAt = vnISOString(new Date(createdAt + 5 * 60 * 1000));
+        }
+    }
+
+    res.json({ 
+        id: order.id, 
+        status: currentStatus, 
+        order_status: currentOrderStatus, 
+        paid_at: order.paid_at,
+        expired,
+        expires_at: expiresAt
+    });
 });
 
 // Xác nhận thanh toán (thủ công từ chủ shop)
 app.post("/api/payment/confirm/:orderId", (req, res) => {
     const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(req.params.orderId);
     if (!order) return res.status(404).json({ error: "Không tìm thấy đơn hàng." });
-    db.prepare("UPDATE orders SET status = 'paid', order_status = 'mới', paid_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.orderId);
+    db.prepare("UPDATE orders SET status = 'paid', order_status = 'mới', paid_at = datetime('now', '+7 hours') WHERE id = ?").run(req.params.orderId);
     
-    // Gửi thông báo
+    // Can xử lý & gửi mail tự động qua cron (order-email-notifier.js)
     order.status = 'paid';
     order.order_status = 'mới';
-    order.paid_at = new Date().toISOString();
-    notifyNewOrder(order);
+    // Lấy paid_at từ DB để đảm bảo đồng bộ giờ VN
+    const updated = db.prepare("SELECT paid_at FROM orders WHERE id = ?").get(req.params.orderId);
+    order.paid_at = updated ? updated.paid_at : vnISOString();
     
     res.json({ message: "✅ Đã xác nhận thanh toán.", orderId: req.params.orderId });
+});
+
+// ------------------------------------------------------------
+// Tra cứu đơn hàng — PUBLIC (cho Vân / khách hàng)
+// ------------------------------------------------------------
+
+app.get("/api/orders/tracking", (req, res) => {
+    const { id, phone } = req.query;
+    
+    if (!id && !phone) {
+        return res.status(400).json({ error: "Vui lòng cung cấp mã đơn (id) hoặc số điện thoại (phone)." });
+    }
+    
+    let orders;
+    if (id) {
+        const order = db.prepare("SELECT * FROM orders WHERE id = ?").get(id);
+        orders = order ? [order] : [];
+    } else {
+        orders = db.prepare("SELECT * FROM orders WHERE phone = ? OR customer_phone = ? ORDER BY created_at DESC LIMIT 5").all(phone, phone);
+    }
+    
+    const result = orders.map(o => ({
+        id: o.id,
+        customer_name: o.customer_name || "—",
+        items: (() => { try { return JSON.parse(o.items); } catch(e) { return []; } })(),
+        total_amount: o.total_amount,
+        payment_status: o.status,
+        order_status: o.order_status || 'mới',
+        created_at: o.created_at,
+        paid_at: o.paid_at || null
+    }));
+    
+    res.json({ orders: result });
 });
 
 // ------------------------------------------------------------
@@ -746,7 +865,7 @@ app.post("/api/payment/confirm/:orderId", (req, res) => {
 // ------------------------------------------------------------
 
 app.get("/api/orders", adminAuth, (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
     const status = req.query.status; // lọc theo order_status (mới, đã xử lý, đã hủy)
     
     let query = "SELECT * FROM orders";
@@ -877,10 +996,68 @@ app.get("/api/revenue", adminAuth, (req, res) => {
         orders: paidOrders.map(o => ({
             id: o.id,
             amount: o.total_amount,
+            createdAt: o.created_at,
             paidAt: o.paid_at
         }))
     });
 });
+
+// ------------------------------------------------------------
+// Gửi mail bài viết mới cho tất cả khách hàng có email
+// ------------------------------------------------------------
+function notifySubscribers(content, platform) {
+    return new Promise((resolve, reject) => {
+        const rows = db.prepare(
+            "SELECT DISTINCT customer_email FROM orders WHERE customer_email IS NOT NULL AND customer_email != '' AND customer_email != 'Không có'"
+        ).all();
+
+        if (rows.length === 0) {
+            console.log(`[SocialPost] 📭 Không có email subscriber nào.`);
+            return resolve();
+        }
+
+        const emails = rows.map(r => r.customer_email);
+        const subject = `📢 ${platform} — Bài viết mới từ Phố Shop`;
+        const truncatedContent = content.length > 2000 ? content.substring(0, 2000) + "..." : content;
+
+        const body = `🛍️ PHỐ SHOP — Bài viết mới nhất\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `📱 Nền tảng: ${platform}\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `${truncatedContent}\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `🏪 Phố Shop — Thời trang & Phong cách\n` +
+            `📞 0909 123 456\n` +
+            `📍 57 Nguyễn Tuân, Thanh Xuân, Hà Nội\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `Bạn nhận được email này vì đã mua hàng tại Phố Shop.\n` +
+            `Để huỷ nhận tin, vui lòng reply "Huỷ".`;
+
+        const SEND_MAIL_SCRIPT = path.join(__dirname, "..", "..", "send-mail.js");
+        let success = 0;
+        let failed = 0;
+
+        const promises = emails.map(email => {
+            return new Promise((res) => {
+                execFile("node", [SEND_MAIL_SCRIPT, email, subject, body], { timeout: 30000 }, (err, stdout) => {
+                    if (err) {
+                        console.error(`[SocialPost] ❌ Gửi mail thất bại cho ${email}: ${err.message}`);
+                        failed++;
+                    } else {
+                        console.log(`[SocialPost] ✅ Đã gửi mail cho ${email}: ${stdout.trim()}`);
+                        success++;
+                    }
+                    res();
+                });
+            });
+        });
+
+        Promise.all(promises).then(() => {
+            console.log(`[SocialPost] 📧 Kết quả gửi mail: ${success} thành công, ${failed} thất bại (${emails.length} subscriber)`);
+            resolve();
+        });
+    });
+}
 
 // ------------------------------------------------------------
 // Khởi động server — đặt SAU khi mọi route đã được đăng ký
@@ -889,6 +1066,7 @@ httpServer.listen(port, () => {
     console.log(`✅ Backend PHỐ STUDIO đang chạy tại http://localhost:${port}`);
     console.log(`   Endpoint agent (mới): POST http://localhost:${port}/api/agent/trigger`);
     console.log(`   Endpoint post (mới):  POST http://localhost:${port}/api/agent/post`);
+   console.log(`   Endpoint ping (kiểm tra): GET  http://localhost:${port}/api/agent/ping`);
     console.log(`   Endpoint kiểm duyệt:  GET/POST http://localhost:${port}/api/approvals`);
     console.log(`   Endpoint chỉnh sửa duyệt: PUT http://localhost:${port}/api/approvals/:id`);
     console.log(`   Endpoint ảnh sản phẩm: GET  http://localhost:${port}/api/images/products`);
